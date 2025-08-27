@@ -19,12 +19,12 @@ pnpm build
 cd clients/axios
 ```
 
-2. Copy `.env-local` to `.env` and add your Ethereum private key:
+2. Copy `.env-local` to `.env` and add your Ethereum private key (remember it should have USDC on Base Sepolia, which you can provision using the [CDP Faucet](https://portal.cdp.coinbase.com/products/faucet)):
 ```bash
 cp .env-local .env
 ```
 
-3. Start the example client:
+3. Start the example client (remember you need to be running a server locally or point at an endpoint):
 ```bash
 pnpm dev
 ```
@@ -32,38 +32,49 @@ pnpm dev
 ## How It Works
 
 The example demonstrates how to:
-1. Create a wallet account using viem
-2. Create an Axios instance with x402 payment interceptor
+1. Create a wallet client using viem
+2. Create an Axios instance with x402 payment handling
 3. Make a request to a paid endpoint
 4. Handle the response or any errors
 
 ## Example Code
 
 ```typescript
-import axios from "axios";
 import { config } from "dotenv";
-import { Hex } from "viem";
+import { createWalletClient, http, publicActions } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { withPaymentInterceptor } from "x402-axios";
+import axios from "axios";
+import { baseSepolia } from "viem/chains";
 
 config();
 
-const { RESOURCE_SERVER_URL, PRIVATE_KEY, ENDPOINT_PATH } = process.env as Record<string, string>;
+const { RESOURCE_SERVER_URL, PRIVATE_KEY, ENDPOINT_PATH } = process.env;
 
-const account = privateKeyToAccount(PRIVATE_KEY as Hex);
-const api = withPaymentInterceptor(
-  axios.create({ baseURL: RESOURCE_SERVER_URL }),
+// Create wallet client
+const account = privateKeyToAccount(PRIVATE_KEY as "0x${string}");
+const client = createWalletClient({
   account,
+  transport: http(),
+  chain: baseSepolia,
+}).extend(publicActions);
+
+// Create Axios instance with payment handling
+const api = withPaymentInterceptor(
+  axios.create({
+    baseURL: RESOURCE_SERVER_URL,
+  }),
+  client
 );
 
+// Make request to paid endpoint
 api
   .get(ENDPOINT_PATH)
-  .then(async response => {
+  .then(response => {
+    console.log(response.headers);
     console.log(response.data);
   })
   .catch(error => {
     console.error(error.response?.data?.error);
   });
 ```
-
-
