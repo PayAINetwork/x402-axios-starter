@@ -1,0 +1,77 @@
+name: Sync upstream axios example
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Sparse clone upstream (axios example)
+        run: |
+          rm -rf upstream
+          git clone --depth=1 --filter=tree:0 https://github.com/coinbase/x402.git upstream
+          cd upstream
+          git sparse-checkout init --cone
+          git sparse-checkout set examples/typescript/clients/axios
+          git checkout
+
+      - name: Capture upstream commit
+        id: up
+        run: |
+          echo "sha=$(git -C upstream rev-parse HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Mirror upstream into vendor
+        run: |
+          rm -rf vendor/upstream
+          mkdir -p vendor/upstream
+          rsync -a upstream/examples/typescript/clients/axios/ vendor/upstream/
+
+      - name: Best-effort resolve x402-axios version
+        id: npm
+        run: |
+          set +e
+          V=$(npm view x402-axios version 2>/dev/null)
+          if [ -z "$V" ]; then V=0.0.0; fi
+          echo "version=$V" >> $GITHUB_OUTPUT
+
+      - name: Sanitize and map into template
+        run: |
+          bash scripts/sanitize.sh examples/typescript/clients/axios "${{ steps.up.outputs.sha }}"
+
+      - name: Inject resolved x402-axios version
+        if: steps.npm.outputs.version != '0.0.0'
+        run: |
+          node -e '
+            const fs = require("fs");
+            const p = "template/package.json";
+            const j = JSON.parse(fs.readFileSync(p, "utf8"));
+            if (j.dependencies && j.dependencies["x402-axios"]) {
+              j.dependencies["x402-axios"] = `^${process.env.V}`;
+              fs.writeFileSync(p, JSON.stringify(j, null, 2));
+            }
+          ' \
+          V='${{ steps.npm.outputs.version }}'
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "chore(sync): update template from upstream axios example @ ${{ steps.up.outputs.sha }}"
+          title: "chore(sync): axios template from upstream @ ${{ steps.up.outputs.sha }}"
+          body: |
+            - Upstream: coinbase/x402 examples/typescript/clients/axios @ ${{ steps.up.outputs.sha }}
+            - x402-axios version: ${{ steps.npm.outputs.version }}
+          branch: chore/sync-upstream
+          delete-branch: true
+
+
