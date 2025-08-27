@@ -29,11 +29,9 @@ api
   .then(response => {
     console.log(response.data);
 
-    const paymentResponse = decodeXPaymentResponse(response.headers["x-payment-response"] as string);
+    const paymentResponse = decodeXPaymentResponse(response.headers["x-payment-response"]);
     console.log(paymentResponse);
   })
   .catch(error => {
-    console.error(error.response?.data?.error ?? error.message);
+    console.error(error);
   });
-
-
