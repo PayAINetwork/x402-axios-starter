@@ -55,6 +55,8 @@ jobs:
 
       - name: Inject resolved x402-axios version
         if: steps.npm.outputs.version != '0.0.0'
+        env:
+          V: ${{ steps.npm.outputs.version }}
         run: |
           node -e '
             const fs = require("fs");
@@ -64,8 +66,7 @@ jobs:
               j.dependencies["x402-axios"] = `^${process.env.V}`;
               fs.writeFileSync(p, JSON.stringify(j, null, 2));
             }
-          ' \
-          V='${{ steps.npm.outputs.version }}'
+          '
 
       - name: Determine if there are changes
         run: |
