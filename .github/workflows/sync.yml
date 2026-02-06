@@ -1,72 +1,74 @@
-name: Sync upstream axios example
+name: Sync upstream x402 clients/axios
 permissions:
   contents: write
   pull-requests: write
   issues: write
 on:
-  schedule:
-    - cron: "0 * * * *"
-  workflow_dispatch: {}
+  schedule: [ { cron: "0 * * * *" } ]  # hourly
+  workflow_dispatch:
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     permissions: { contents: write, pull-requests: write }
+    env:
+      UPSTREAM_REPO: coinbase/x402
+      UPSTREAM_PATH: examples/typescript/clients/axios
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Sparse clone upstream (axios example)
+      - name: Sparse clone upstream
         run: |
-          rm -rf upstream
-          git clone --depth=1 --filter=tree:0 https://github.com/coinbase/x402.git upstream
+          git clone --depth=1 --filter=blob:none --sparse https://github.com/${UPSTREAM_REPO}.git upstream
           cd upstream
-          git sparse-checkout init --cone
-          git sparse-checkout set examples/typescript/clients/axios
-          git checkout
+          git sparse-checkout set "${UPSTREAM_PATH}"
+          echo "UPSTREAM_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
 
-      - name: Capture upstream commit
-        id: up
+      - name: Resolve latest @x402/axios version from npm
         run: |
-          echo "sha=$(git -C upstream rev-parse HEAD)" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          VERSION=$(npm view @x402/axios version 2>/dev/null || echo "0.0.0")
+          echo "X402_AXIOS_VERSION=${VERSION}" >> $GITHUB_ENV
 
-      - name: Mirror upstream into vendor
+      - name: Store old version for comparison
         run: |
-          rm -rf vendor/upstream
-          mkdir -p vendor/upstream
-          rsync -a upstream/examples/typescript/clients/axios/ vendor/upstream/
+          OLD_AXIOS=$(node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('package.json','utf8'));const c=j.config||{};console.log(c.x402AxiosVersion||'0.0.0')")
+          echo "OLD_X402_AXIOS_VERSION=${OLD_AXIOS}" >> $GITHUB_ENV
 
-      - name: Best-effort resolve x402-axios version
-        id: npm
+      - name: Record resolved version in root package.json
         run: |
-          set +e
-          V=$(npm view x402-axios version 2>/dev/null)
-          if [ -z "$V" ]; then V=0.0.0; fi
-          echo "version=$V" >> $GITHUB_OUTPUT
+          node -e "const fs=require('fs');const p='package.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));(j.config??={});j.config.x402AxiosVersion=process.env.X402_AXIOS_VERSION;fs.writeFileSync(p,JSON.stringify(j,null,2));"
 
-      - name: Sanitize and map into template
+      - name: Stage upstream into vendor folder
         run: |
-          bash scripts/sanitize.sh examples/typescript/clients/axios "${{ steps.up.outputs.sha }}"
+          rm -rf vendor/upstream && mkdir -p vendor/upstream
+          rsync -a --delete upstream/${UPSTREAM_PATH}/ vendor/upstream/
 
-      - name: Inject resolved x402-axios version
-        if: steps.npm.outputs.version != '0.0.0'
-        env:
-          V: ${{ steps.npm.outputs.version }}
+      - name: Sanitize & map into template (best-effort)
         run: |
-          node -e '
-            const fs = require("fs");
-            const p = "template/package.json";
-            const j = JSON.parse(fs.readFileSync(p, "utf8"));
-            if (j.dependencies && j.dependencies["x402-axios"]) {
-              j.dependencies["x402-axios"] = `^${process.env.V}`;
-              fs.writeFileSync(p, JSON.stringify(j, null, 2));
-            }
-          '
+          chmod +x scripts/sanitize.sh
+          scripts/sanitize.sh "${UPSTREAM_PATH}" "${UPSTREAM_SHA}"
+
+      - name: Inject x402 package versions into template/package.json
+        run: |
+          node <<'EOF'
+          const fs = require('fs');
+          const p = 'template/package.json';
+          if (!fs.existsSync(p)) process.exit(0);
+          const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+          const v = process.env.X402_AXIOS_VERSION;
+          if (!v || v === '0.0.0') process.exit(0);
+
+          j.dependencies = j.dependencies || {};
+          // Ensure all required x402 packages are present with correct versions
+          const x402Packages = ['@x402/axios', '@x402/evm', '@x402/svm'];
+          for (const pkg of x402Packages) {
+            j.dependencies[pkg] = '^' + v;
+          }
+
+          fs.writeFileSync(p, JSON.stringify(j, null, 2));
+          console.log(`Set x402 packages to ^${v}`);
+          EOF
 
       - name: Determine if there are changes
         run: |
@@ -77,32 +79,69 @@ jobs:
             echo "HAS_CHANGES=true" >> $GITHUB_ENV
           fi
 
-      - name: Bump starter package version (patch)
+      - name: Bump starter package version
         if: ${{ env.HAS_CHANGES == 'true' }}
         run: |
-          node -e '
-            const fs = require("fs");
-            const p = "package.json";
-            const j = JSON.parse(fs.readFileSync(p, "utf8"));
-            const v = j.version || "0.0.0";
-            const parts = v.split(".").map(n => parseInt(n, 10));
-            while (parts.length < 3) parts.push(0);
-            parts[2] = isNaN(parts[2]) ? 0 : parts[2] + 1;
-            j.version = parts.join(".");
-            fs.writeFileSync(p, JSON.stringify(j, null, 2));
-          '
+          node <<'EOF'
+          const fs = require('fs');
+          const p = 'package.json';
+          const j = JSON.parse(fs.readFileSync(p, 'utf-8'));
+          const v = j.version || '0.0.0';
+          const parts = v.split('.').map(n => parseInt(n, 10));
+          while (parts.length < 3) parts.push(0);
 
-      - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v7
+          const parseVersion = (v) => {
+            if (!v || v === '0.0.0') return { major: 0, minor: 0, patch: 0 };
+            const parts = v.split('.').map(n => parseInt(n, 10));
+            return {
+              major: isNaN(parts[0]) ? 0 : parts[0],
+              minor: isNaN(parts[1]) ? 0 : parts[1],
+              patch: isNaN(parts[2]) ? 0 : parts[2],
+            };
+          };
+
+          const compareVersions = (oldV, newV) => {
+            if (oldV === '0.0.0') return 'none'; // New dependency, don't count as change
+            const old = parseVersion(oldV);
+            const new_ = parseVersion(newV);
+
+            if (old.major < new_.major) return 'major';
+            if (old.major === new_.major && old.minor < new_.minor) return 'minor';
+            if (old.major === new_.major && old.minor === new_.minor && old.patch < new_.patch) return 'patch';
+            return 'none';
+          };
+
+          const oldAxios = process.env.OLD_X402_AXIOS_VERSION || '0.0.0';
+          const newAxios = process.env.X402_AXIOS_VERSION || '0.0.0';
+          const change = compareVersions(oldAxios, newAxios);
+
+          if (change === 'major' || change === 'minor') {
+            parts[1] = (parts[1] || 0) + 1;
+            parts[2] = 0;
+            console.log(`Detected ${change} version change in @x402/axios: ${oldAxios} → ${newAxios}`);
+            console.log('Bumping minor version');
+          } else {
+            parts[2] = (parts[2] || 0) + 1;
+            console.log('Only patch changes detected, bumping patch version');
+          }
+
+          j.version = parts.join('.');
+          fs.writeFileSync(p, JSON.stringify(j, null, 2));
+          console.log(`Bumped version to ${j.version}`);
+          EOF
+        env:
+          OLD_X402_AXIOS_VERSION: ${{ env.OLD_X402_AXIOS_VERSION }}
+          X402_AXIOS_VERSION: ${{ env.X402_AXIOS_VERSION }}
+
+      - name: Open PR with changes
+        uses: peter-evans/create-pull-request@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          commit-message: "chore(sync): update template from upstream axios example @ ${{ steps.up.outputs.sha }}"
-          title: "chore(sync): axios template from upstream @ ${{ steps.up.outputs.sha }}"
-          body: |
-            - Upstream: coinbase/x402 examples/typescript/clients/axios @ ${{ steps.up.outputs.sha }}
-            - x402-axios version: ${{ steps.npm.outputs.version }}
+          commit-message: "chore(axios): sync from ${UPSTREAM_REPO}@${{ env.UPSTREAM_SHA }}"
           branch: chore/sync-upstream
-          delete-branch: true
-
-
+          title: "Sync upstream (clients/axios) — ${{ env.UPSTREAM_SHA }}"
+          body: |
+            Auto-synced from https://github.com/${{ env.UPSTREAM_REPO }}
+            Path: ${{ env.UPSTREAM_PATH }}
+            SHA:  ${{ env.UPSTREAM_SHA }}
