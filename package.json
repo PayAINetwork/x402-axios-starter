@@ -1,6 +1,6 @@
 {
   "name": "@payai/x402-axios-starter",
-  "version": "1.0.0",
+  "version": "2.3.0",
   "private": false,
   "publishConfig": {
     "access": "public",
