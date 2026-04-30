@@ -52,8 +52,8 @@ try {
 
 // 2) Install dependencies
 try {
-  console.log("- Installing dependencies (npm install)...");
-  execSync("npm install", { stdio: "inherit", cwd: targetDir });
+  console.log("- Installing dependencies (npm install --include=dev)...");
+  execSync("npm install --include=dev", { stdio: "inherit", cwd: targetDir });
 } catch (err) {
   console.warn("- npm install failed, you may run it manually:", err instanceof Error ? err.message : String(err));
 }
