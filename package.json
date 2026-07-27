@@ -1,6 +1,6 @@
 {
   "name": "@payai/x402-axios-starter",
-  "version": "2.3.1",
+  "version": "2.20.0",
   "private": false,
   "publishConfig": {
     "access": "public",
@@ -37,6 +37,6 @@
     "url": "https://github.com/PayAINetwork/x402-axios-starter"
   },
   "config": {
-    "x402AxiosVersion": "2.3.1"
+    "x402AxiosVersion": "2.20.0"
   }
 }
